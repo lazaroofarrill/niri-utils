@@ -332,7 +332,7 @@ func (s *NiriState) moveTrackedToWorkspace(workspaceId int) error {
 	return nil
 }
 
-func cmdTrackChildProcess(s *NiriState, windowId int, workspaceIdx int) error {
+func cmdTrackChildProcess(_ *NiriState, windowId int, workspaceIdx int) error {
 	cmd := exec.Command(
 		"niri",
 		"msg",
