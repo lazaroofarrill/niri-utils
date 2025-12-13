@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -110,6 +111,11 @@ func main() {
 
 	configFilePath := flag.String("rules", "rules.json", "Window rules to look for")
 
+	laxMatch := flag.Bool("lax",
+		false,
+		"Try using the closest match if no perfect match is found",
+	)
+
 	flag.Parse()
 
 	rulesContet, err := os.ReadFile(*configFilePath)
@@ -154,8 +160,11 @@ func main() {
 		panic(err)
 	}
 
-	// var niriState = NewNiriState(windowToMatch, niriCommands, cmdTrackChildProcess) //using child process
-	var niriState = NewNiriState(windowToMatch, niriCommands, cmdTrackChannel) //using socket
+	var niriState = NewNiriState(windowToMatch,
+		niriCommands,
+		cmdTrackChannel,
+		*laxMatch,
+	) //using socket
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -177,7 +186,7 @@ func main() {
 				panic(err)
 			}
 			if line != "" {
-				fmt.Println(line)
+				slog.Debug(line)
 				niriEvents <- line
 			}
 		}
@@ -190,7 +199,10 @@ func main() {
 				panic(err)
 			}
 			if line != "" {
-				fmt.Println(line)
+				slog.Debug(
+					"action",
+					"result", line,
+				)
 				niriEvents <- line
 			}
 		}
@@ -198,7 +210,9 @@ func main() {
 
 	wg.Go(func() {
 		for cmd := range niriCommands {
-			fmt.Println(cmd)
+			slog.Debug("sending action",
+				"action", cmd,
+			)
 			_, err = actionsWriter.WriteString(cmd)
 			if err != nil {
 				panic(err)
@@ -222,12 +236,14 @@ type NiriState struct {
 	LookupWindowRules    map[string]any
 	OutChan              chan<- string
 	MoveTrackedWindowsCb MoveTrackedWindowsCb
+	LaxMatch             bool
 }
 
 func NewNiriState(
 	lookupWindowRules map[string]any,
 	outChan chan<- string,
 	moveTrackedWindowsCb MoveTrackedWindowsCb,
+	laxMatch bool,
 ) NiriState {
 	return NiriState{
 		CurrentWorkspaceId:   -1,
@@ -236,6 +252,7 @@ func NewNiriState(
 		LookupWindowRules:    lookupWindowRules,
 		OutChan:              outChan,
 		MoveTrackedWindowsCb: moveTrackedWindowsCb,
+		LaxMatch:             laxMatch,
 	}
 }
 
@@ -285,12 +302,6 @@ func (s *NiriState) processEvent(evt string) error {
 	}
 
 	if data.WindowOpenedOrChanged != nil {
-		txt, err := json.Marshal(data.WindowOpenedOrChanged)
-		if err != nil {
-			println("error")
-			return err
-		}
-		fmt.Fprintln(os.Stdout, string(txt))
 		s.processWindow(data.WindowOpenedOrChanged.Window)
 	}
 
@@ -302,7 +313,11 @@ func (s *NiriState) processWindow(window Window) {
 	m := make(map[string]any)
 	json.Unmarshal(b, &m)
 
-	matches, _ := windowMatchCount(s.LookupWindowRules, m)
+	matches, maxMatches := windowMatchCount(s.LookupWindowRules, m)
+
+	if !s.LaxMatch && matches != maxMatches {
+		return
+	}
 
 	if matches > s.MatchCount {
 		s.MatchCount = matches
